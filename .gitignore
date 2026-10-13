@@ -1,0 +1,23 @@
+# Build output
+bin/
+obj/
+out/
+publish/
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+
+# Test output
+TestResults/
+*.trx
+
+# Local secrets and environment overrides (none are required to run the stack)
+.env
+*.env.local
+appsettings.*.local.json

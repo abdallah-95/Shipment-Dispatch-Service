@@ -1,0 +1,60 @@
+# Start order: db (healthy) -> seed (exits 0) -> api.
+#   docker compose up --build
+# API: http://localhost:8080/health/live and /health/ready
+
+name: dispatch
+
+# LOCAL-ONLY THROWAWAY CREDENTIAL. This password protects a database that lives in a
+# container on a developer machine and is not published to the host. Do not reuse it
+# anywhere. It appears twice (the db's SA password, and this connection string) because
+# compose cannot reference one value from another.
+# TrustServerCertificate=True because the local SQL Server uses a self-signed certificate.
+x-connection-string: &connection-string
+  ConnectionStrings__Default: "Server=db;Database=Dispatch;User Id=sa;Password=Dispatch-Local-Dev-1;TrustServerCertificate=True"
+
+services:
+  db:
+    build:
+      context: ./docker/sqlserver
+    image: dispatch-sqlserver:local
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Dispatch-Local-Dev-1" # local-only throwaway, see above
+    volumes:
+      - dispatch-db-data:/var/opt/mssql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -Q "SELECT 1" -b -o /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  seed:
+    build:
+      context: .
+      target: seeder
+    image: dispatch-seeder:local
+    environment:
+      <<: *connection-string
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      target: api
+    image: dispatch-api:local
+    environment:
+      <<: *connection-string
+    ports:
+      - "8080:8080"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+volumes:
+  dispatch-db-data:

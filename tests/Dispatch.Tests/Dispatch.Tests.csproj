@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Dispatch.Domain\Dispatch.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Dispatch.Application\Dispatch.Application.csproj" />
+    <ProjectReference Include="..\..\src\Dispatch.Infrastructure\Dispatch.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Dispatch.Api\Dispatch.Api.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+</Project>
