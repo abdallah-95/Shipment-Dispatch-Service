@@ -36,10 +36,10 @@ src/
   Dispatch.Domain/          entities, enums, transition rules — no dependencies
   Dispatch.Application/     services, DTOs, validation — references Domain
   Dispatch.Infrastructure/  DbContext, configurations, migrations, interceptors
-  Dispatch.Api/             endpoints, middleware, DI composition
+  Dispatch.Api/             controllers, middleware, DI composition
   Dispatch.Seeder/          console app — references Infrastructure, NOT Api
 tests/
-  Dispatch.Tests/           xUnit + Testcontainers
+  Dispatch.Tests/           xUnit, run in a container against the compose db
 docker/
   sqlserver/Dockerfile      official SQL Server image + mssql-server-fts
 Dockerfile                  one file, two targets: api and seeder
@@ -47,6 +47,18 @@ docker-compose.yml
 ```
 
 Dependencies point inward. Domain references nothing.
+
+## API style
+
+The HTTP layer uses controllers, not Minimal APIs.
+
+- One controller per resource in `Dispatch.Api/Controllers`, inheriting
+  `ControllerBase` with `[ApiController]`.
+- Controllers stay thin: bind input, call an Application-layer service, map the
+  result to an HTTP response. No business rules and no EF queries in controllers.
+- Every action takes a `CancellationToken` and returns `ActionResult<T>`.
+- Model-validation failures and all other errors return ProblemDetails.
+- Do not mix in Minimal APIs.
 
 ## Domain
 
@@ -168,6 +180,9 @@ Returned       -> (terminal)
 
 - Single Dockerfile with two final targets (`api`, `seeder`) sharing restore
   and build layers. Multi-stage; the host needs no .NET SDK.
+- A third target, `tests`, builds on the SDK image and runs `dotnet test`. It is
+  only started through the compose `tests` profile, so a plain `docker compose up`
+  never runs it.
 - SQL Server image built locally from the official image plus `mssql-server-fts`.
 - Pin image tags. Never `latest`.
 - Healthcheck uses `/opt/mssql-tools18/bin/sqlcmd` with `-C`.
@@ -190,10 +205,13 @@ Returned       -> (terminal)
 
 ## Tests
 
-- xUnit with Testcontainers, built from `docker/sqlserver/Dockerfile` so tests
-  get full-text search. Never the EF in-memory provider or SQLite: neither
-  enforces concurrency tokens or supports full-text search.
-- One shared container fixture per test run.
+- xUnit. Tests run as a compose service inside a Linux container against the
+  compose `db` service (the same custom SQL Server image, so tests get full-text
+  search). Never the EF in-memory provider or SQLite: neither enforces
+  concurrency tokens or supports full-text search.
+- Each run creates a uniquely named database, applies migrations, and drops it
+  at the end. One shared fixture per test run.
+- Tests create their own data and never read the seeded dataset.
 - Required:
   - every legal transition succeeds
   - every illegal pair is rejected — loop over the transition table, do not

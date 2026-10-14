@@ -1,4 +1,4 @@
-# One Dockerfile, two runnable targets: `api` and `seeder`.
+# One Dockerfile, three runnable targets: `api`, `seeder` and `tests`.
 # They share the restore and build stages, so a compose build compiles the solution once.
 # The host needs no .NET SDK.
 
@@ -44,3 +44,15 @@ WORKDIR /app
 COPY --from=publish-seeder /out .
 USER $APP_UID
 ENTRYPOINT ["dotnet", "Dispatch.Seeder.dll"]
+
+# Runs the test suite. Built on the SDK image (not a runtime image) because it executes
+# `dotnet test`. The test project gets its own restore step so test-only packages never
+# invalidate the restore layer that api and seeder share. Started only through the compose
+# `tests` profile.
+FROM build AS tests
+COPY tests/Dispatch.Tests/Dispatch.Tests.csproj tests/Dispatch.Tests/
+RUN dotnet restore tests/Dispatch.Tests/Dispatch.Tests.csproj
+COPY tests/ tests/
+RUN dotnet build tests/Dispatch.Tests/Dispatch.Tests.csproj -c Release --no-restore
+# Exec form, so `dotnet test` is PID 1's program and its exit code is the container's.
+ENTRYPOINT ["dotnet", "test", "tests/Dispatch.Tests/Dispatch.Tests.csproj", "-c", "Release", "--no-build", "--logger", "console;verbosity=normal"]

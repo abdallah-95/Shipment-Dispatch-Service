@@ -2,4 +2,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Dispatch.Domain\Dispatch.Domain.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Abstractions only (DbSet, AsNoTracking, ...). The SQL Server provider lives in Infrastructure. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+  </ItemGroup>
 </Project>

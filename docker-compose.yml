@@ -6,8 +6,9 @@ name: dispatch
 
 # LOCAL-ONLY THROWAWAY CREDENTIAL. This password protects a database that lives in a
 # container on a developer machine and is not published to the host. Do not reuse it
-# anywhere. It appears twice (the db's SA password, and this connection string) because
-# compose cannot reference one value from another.
+# anywhere. It appears three times (the db's SA password, this connection string, and the
+# tests service's server connection string) because compose cannot reference one value
+# from another.
 # TrustServerCertificate=True because the local SQL Server uses a self-signed certificate.
 x-connection-string: &connection-string
   ConnectionStrings__Default: "Server=db;Database=Dispatch;User Id=sa;Password=Dispatch-Local-Dev-1;TrustServerCertificate=True"
@@ -55,6 +56,25 @@ services:
     depends_on:
       seed:
         condition: service_completed_successfully
+
+  # Not started by a plain `docker compose up` (profile). Run it with:
+  #   docker compose --profile tests run --rm tests
+  # It needs only the db service: each run creates its own throwaway database on it.
+  tests:
+    build:
+      context: .
+      target: tests
+    image: dispatch-tests:local
+    profiles: ["tests"]
+    environment:
+      # Server-level connection (master) so the test fixture can create and drop its own
+      # database. Local-only throwaway credential, see above. TrustServerCertificate=True
+      # because the local SQL Server uses a self-signed certificate.
+      DISPATCH_TEST_SQLSERVER: "Server=db;Database=master;User Id=sa;Password=Dispatch-Local-Dev-1;TrustServerCertificate=True"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
 
 volumes:
   dispatch-db-data:
