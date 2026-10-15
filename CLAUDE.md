@@ -102,9 +102,6 @@ Returned       -> (terminal)
   mismatch, THEN validate the transition. A stale client must get a 409
   describing the current state, not a 400 for a transition it never requested.
   The save-time token check still catches the race between load and save.
-- Before saving, set the original value to the client's version so EF checks
-  against what the client saw, not what was just read:
-  `db.Entry(shipment).Property(s => s.Version).OriginalValue = request.ExpectedVersion;`
 - The status change and its history row are written in ONE `SaveChangesAsync`
   call. Never two.
 - On `DbUpdateConcurrencyException`: return 409 ProblemDetails with
@@ -115,8 +112,10 @@ Returned       -> (terminal)
 
 - `AppDbContext` overrides nothing. All save-time cross-cutting behaviour lives
   in `SaveChangesInterceptor` implementations.
-- Registration order: `SearchTextInterceptor` FIRST, `VersionInterceptor` SECOND.
-  Comment the registration explaining why.
+- `VersionInterceptor` increments `Version` only for `Modified` Shipment
+  entities where at least one property OTHER than `SearchText` is modified. A
+  SearchText-only change never bumps the version. This rule, not interceptor
+  registration order, is what keeps derived data from causing version bumps.
 - Both interceptors implement BOTH `SavingChanges` and `SavingChangesAsync`.
   EF Core does not route one to the other.
 - `SearchTextInterceptor` resolves customer names in ONE batched query, never
@@ -161,6 +160,9 @@ Returned       -> (terminal)
 ## Schema and seeding
 
 - Schema comes from EF migrations. Never `EnsureCreated`.
+- Any migration containing full-text DDL passes `suppressTransaction: true` on
+  each `Sql` call, because SQL Server rejects full-text DDL inside a user
+  transaction.
 - The API does NOT migrate and does NOT seed on startup.
 - The seeder applies migrations, then seeds, then exits.
 - Insert with `SqlBulkCopy`, not through the change tracker.
