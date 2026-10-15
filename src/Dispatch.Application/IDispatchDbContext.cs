@@ -1,5 +1,6 @@
 using Dispatch.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace Dispatch.Application;
 
@@ -14,4 +15,8 @@ public interface IDispatchDbContext
     DbSet<Driver> Drivers { get; }
     DbSet<Shipment> Shipments { get; }
     DbSet<ShipmentStatusHistory> ShipmentStatusHistory { get; }
+
+    ChangeTracker ChangeTracker { get; }
+
+    Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

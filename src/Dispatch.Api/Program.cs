@@ -1,4 +1,4 @@
-using System.Text.Json.Serialization;
+using Dispatch.Api.Json;
 using Dispatch.Application;
 using Dispatch.Infrastructure;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -11,10 +11,12 @@ var connectionString = builder.Configuration.GetConnectionString(DependencyInjec
 
 builder.Services.AddInfrastructure(connectionString);
 builder.Services.AddApplication();
+builder.Services.AddSingleton(TimeProvider.System);
 
+// Enums travel as names; numbers and numeric strings are rejected (see EnumNameConverterFactory).
 builder.Services
     .AddControllers()
-    .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+    .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new EnumNameConverterFactory()));
 
 // Every error response is ProblemDetails: validation failures ([ApiController]), unhandled
 // exceptions (UseExceptionHandler) and bare status codes such as route misses (UseStatusCodePages).

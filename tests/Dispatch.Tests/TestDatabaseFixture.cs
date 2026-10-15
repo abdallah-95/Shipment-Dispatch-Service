@@ -39,8 +39,17 @@ public sealed class TestDatabaseFixture : IAsyncLifetime
         await db.Database.MigrateAsync();
     }
 
-    public AppDbContext CreateDbContext() =>
-        new(new DbContextOptionsBuilder<AppDbContext>().UseSqlServer(ConnectionString).Options);
+    /// <summary>
+    /// Built through the same options method as the API, so test contexts carry the same save-time
+    /// interceptors. A context without VersionInterceptor would never bump Version, and concurrency
+    /// tests run through it would prove nothing.
+    /// </summary>
+    public AppDbContext CreateDbContext()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>();
+        DependencyInjection.ConfigureDbContext(options, ConnectionString);
+        return new AppDbContext(options.Options);
+    }
 
     public async Task DisposeAsync()
     {
