@@ -60,6 +60,19 @@ The HTTP layer uses controllers, not Minimal APIs.
 - Model-validation failures and all other errors return ProblemDetails.
 - Do not mix in Minimal APIs.
 
+## API docs
+
+- Swagger is provided by Swashbuckle.AspNetCore, version pinned in
+  `Directory.Packages.props`.
+- It is enabled by the configuration flag `Swagger:Enabled`, which defaults to
+  false. Docker Compose sets it to true (`Swagger__Enabled`) for the local stack,
+  with a comment that production would leave it off or put it behind
+  authentication.
+- Do NOT gate it on `ASPNETCORE_ENVIRONMENT=Development`. Switching the
+  container to Development would change other behaviour.
+- Every controller action declares its responses with `ProducesResponseType`.
+- No auth scheme in the Swagger setup.
+
 ## Domain
 
 Entities: Customer (~5,000), Driver (~200), Shipment (50,000+), ShipmentStatusHistory.
@@ -107,6 +120,15 @@ Returned       -> (terminal)
 - On `DbUpdateConcurrencyException`: return 409 ProblemDetails with
   `currentStatus`, `currentVersion`, and `allowedTransitions` from the current
   status. Do not retry. Discard the context after the exception.
+
+## Status endpoint decisions
+
+- Moving to PickedUp requires a `driverId` of an existing driver, else 422.
+  A `driverId` sent with any other transition is 400.
+- An illegal transition, including a same-status request, returns 422.
+- A stale or conflicting version returns 409. If a concurrent winner already
+  moved the shipment to the requested status, it is still 409, not success.
+  There is no idempotent-success case.
 
 ## Interceptors
 

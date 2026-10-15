@@ -1,4 +1,5 @@
 using Dispatch.Api.Json;
+using Dispatch.Api.Swagger;
 using Dispatch.Application;
 using Dispatch.Infrastructure;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -22,6 +23,13 @@ builder.Services
 // exceptions (UseExceptionHandler) and bare status codes such as route misses (UseStatusCodePages).
 builder.Services.AddProblemDetails();
 
+// Off unless Swagger:Enabled is true (compose sets it for the local stack).
+var swaggerEnabled = builder.Configuration.IsEnabled();
+if (swaggerEnabled)
+{
+    builder.Services.AddSwaggerDocs();
+}
+
 // "live" has no checks: it only proves the process is up. "ready" is every check tagged "ready".
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<AppDbContext>("sqlserver", tags: ["ready"]);
@@ -30,6 +38,11 @@ var app = builder.Build();
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+
+if (swaggerEnabled)
+{
+    app.UseSwaggerDocs();
+}
 
 app.MapControllers();
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });

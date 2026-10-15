@@ -7,6 +7,12 @@ namespace Dispatch.Api.Controllers;
 [Route("api/shipments")]
 public sealed class ShipmentsController(IShipmentQueryService shipments, IShipmentStatusService statuses) : ControllerBase
 {
+    /// <summary>
+    /// Gets one shipment with its customer, driver and full status history.
+    /// </summary>
+    /// <param name="id">The shipment id.</param>
+    /// <response code="200">The shipment. Its <c>version</c> is what a status change sends back as <c>expectedVersion</c>.</response>
+    /// <response code="404">No shipment with this id.</response>
     [HttpGet("{id:int}")]
     [ProducesResponseType<ShipmentDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
@@ -22,6 +28,18 @@ public sealed class ShipmentsController(IShipmentQueryService shipments, IShipme
         return detail;
     }
 
+    /// <summary>
+    /// Moves a shipment to the next status and records it in the status history.
+    /// </summary>
+    /// <remarks>
+    /// <c>expectedVersion</c> is the <c>version</c> from the last GET or POST response for this shipment;
+    /// <c>driverId</c> is required only when moving to PickedUp (and rejected for any other status).
+    /// </remarks>
+    /// <param name="id">The shipment id.</param>
+    /// <param name="request">The target status, the version the client last saw, and a driver when picking up.</param>
+    /// <response code="200">The shipment's new status and version.</response>
+    /// <response code="400">The body is invalid: a required field is missing, the status is not a status name, or <c>driverId</c> was sent for a status other than PickedUp.</response>
+    /// <response code="404">No shipment with this id.</response>
     [HttpPost("{id:int}/status")]
     [ProducesResponseType<ShipmentStatusChangedDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]

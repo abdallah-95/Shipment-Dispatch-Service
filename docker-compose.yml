@@ -1,6 +1,7 @@
 # Start order: db (healthy) -> seed (exits 0) -> api.
 #   docker compose up --build
 # API: http://localhost:8080/health/live and /health/ready
+# Swagger UI: http://localhost:8080/swagger
 
 name: dispatch
 
@@ -51,6 +52,9 @@ services:
     image: dispatch-api:local
     environment:
       <<: *connection-string
+      # Swagger UI at /swagger for the local stack. Production would leave this off (the default)
+      # or put it behind authentication.
+      Swagger__Enabled: "true"
     ports:
       - "8080:8080"
     depends_on:
