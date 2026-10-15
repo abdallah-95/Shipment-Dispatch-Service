@@ -38,26 +38,38 @@ try
     await db.Database.MigrateAsync(cts.Token);
     logger.LogInformation("Migrations applied");
 
+    await db.Database.OpenConnectionAsync(cts.Token);
+    var connection = (SqlConnection)db.Database.GetDbConnection();
+
     if (await db.Shipments.AnyAsync(cts.Token))
     {
         logger.LogInformation("already seeded, skipping");
-        return 0;
+    }
+    else
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var dataset = DatasetGenerator.Generate();
+        logger.LogInformation(
+            "Generated {CustomerCount} customers, {DriverCount} drivers, {ShipmentCount} shipments, {HistoryCount} history rows in {ElapsedMs} ms",
+            dataset.Customers.Count, dataset.Drivers.Count, dataset.Shipments.Count, dataset.History.Count, stopwatch.ElapsedMilliseconds);
+
+        stopwatch.Restart();
+        await BulkInserter.InsertAsync(connection, dataset, cts.Token);
+        logger.LogInformation("Bulk insert committed in {ElapsedMs} ms", stopwatch.ElapsedMilliseconds);
+
+        foreach (var group in dataset.Shipments.GroupBy(s => s.Status).OrderBy(g => g.Key))
+        {
+            logger.LogInformation("Seeded {Status} shipments: {Count}", group.Key, group.Count());
+        }
     }
 
-    var stopwatch = Stopwatch.StartNew();
-    var dataset = DatasetGenerator.Generate();
-    logger.LogInformation(
-        "Generated {CustomerCount} customers, {DriverCount} drivers, {ShipmentCount} shipments, {HistoryCount} history rows in {ElapsedMs} ms",
-        dataset.Customers.Count, dataset.Drivers.Count, dataset.Shipments.Count, dataset.History.Count, stopwatch.ElapsedMilliseconds);
-
-    stopwatch.Restart();
-    await db.Database.OpenConnectionAsync(cts.Token);
-    await BulkInserter.InsertAsync((SqlConnection)db.Database.GetDbConnection(), dataset, cts.Token);
-    logger.LogInformation("Bulk insert committed in {ElapsedMs} ms", stopwatch.ElapsedMilliseconds);
-
-    foreach (var group in dataset.Shipments.GroupBy(s => s.Status).OrderBy(g => g.Key))
+    // On both paths, so the API never starts against an incomplete full-text index: not after a fresh
+    // seed, not on a volume that gained the index after it was seeded, not on a retry after a failed wait.
+    var shipmentCount = await db.Shipments.CountAsync(cts.Token);
+    if (!await SearchReadiness.WaitForPopulationAsync(connection, shipmentCount, logger, cts.Token)
+        || !await SearchReadiness.SmokeSearchAsync(db, logger, cts.Token))
     {
-        logger.LogInformation("Seeded {Status} shipments: {Count}", group.Key, group.Count());
+        return 1;
     }
 
     return 0;

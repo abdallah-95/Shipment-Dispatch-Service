@@ -22,9 +22,15 @@ internal sealed class ShipmentConfiguration : IEntityTypeConfiguration<Shipment>
         // Managed optimistic concurrency (incremented by VersionInterceptor), not rowversion.
         builder.Property(s => s.Version).IsConcurrencyToken();
 
-        // Indexes at this stage: the unique tracking number and the foreign keys (below).
-        // Filter and sort indexes are added with the list endpoint, justified by measurement.
+        // Indexes: the unique tracking number, the foreign keys (below), and one list index. Each list
+        // index must be justified by measurement on the full seeded dataset.
         builder.HasIndex(s => s.TrackingNumber).IsUnique();
+
+        // The default list order (createdAt desc, Id desc) and the created-date range filter. Turns the
+        // default page from a scan and sort of every row into an ordered read of one page. CreatedAt never
+        // changes after insert, so status changes do not maintain this index. (Status, CreatedAt, Id) and
+        // (DriverId, CreatedAt, Id) were measured too and gained too little to pay their write cost.
+        builder.HasIndex(s => new { s.CreatedAt, s.Id });
 
         builder.HasOne(s => s.Customer).WithMany().HasForeignKey(s => s.CustomerId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(s => s.Driver).WithMany().HasForeignKey(s => s.DriverId).OnDelete(DeleteBehavior.Restrict);

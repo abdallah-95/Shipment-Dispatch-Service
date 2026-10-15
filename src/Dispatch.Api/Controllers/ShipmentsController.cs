@@ -5,8 +5,71 @@ namespace Dispatch.Api.Controllers;
 
 [ApiController]
 [Route("api/shipments")]
-public sealed class ShipmentsController(IShipmentQueryService shipments, IShipmentStatusService statuses) : ControllerBase
+public sealed class ShipmentsController(
+    IShipmentQueryService shipments,
+    IShipmentListService list,
+    IShipmentStatusService statuses) : ControllerBase
 {
+    /// <summary>
+    /// Lists shipments one page at a time, with optional filters, search and sort.
+    /// </summary>
+    /// <remarks>
+    /// Filters combine with AND. <c>totalCount</c> counts every shipment matching the same filters.
+    /// <c>search</c> is word-prefix matching, not substring matching: "port" finds "Port Said" and
+    /// "Portsmouth", but "ort" finds neither.
+    /// </remarks>
+    /// <param name="page">1-based page number. Default 1. Must be 1 or greater.</param>
+    /// <param name="pageSize">Rows per page. Default 25. Must be 1 or greater; values above 100 are clamped to 100.</param>
+    /// <param name="status">Only shipments in this status (case-insensitive name): Created, PickedUp, InTransit, OutForDelivery, Delivered, Failed or Returned.</param>
+    /// <param name="createdFrom">Only shipments created at or after this instant. ISO-8601 with Z or an offset, such as 2026-09-01T00:00:00Z; send a '+' offset as %2B.</param>
+    /// <param name="createdTo">Only shipments created before this instant (exclusive), same format. Must not be earlier than createdFrom.</param>
+    /// <param name="driverId">Only shipments assigned to this driver.</param>
+    /// <param name="search">Words to find across tracking number, customer name and destination. Each word must match the start of a word (word prefix), not an arbitrary substring, and all words must match. Anything that is not a letter or digit separates words, so quotes, hyphens and operators such as AND/OR/NOT are not syntax. At most 100 characters; only the first 8 words are used. Input with no letters or digits returns an empty page.</param>
+    /// <param name="sortBy">createdAt (default), updatedAt, status, trackingNumber, customerName or destination. status sorts by name, alphabetically. Ties are always broken by id, in the same direction.</param>
+    /// <param name="sortDir">asc or desc (default).</param>
+    /// <response code="200">The page of shipments, the page number, the effective page size and the total count.</response>
+    /// <response code="400">A parameter is invalid: page or pageSize below 1, an unknown status, sortBy or sortDir, a date that is not an instant with an offset, createdFrom after createdTo, or search longer than 100 characters. <c>errors</c> is keyed by parameter name.</response>
+    [HttpGet]
+    [ProducesResponseType<ShipmentPageDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ShipmentPageDto>> List(
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? status,
+        [FromQuery] string? createdFrom,
+        [FromQuery] string? createdTo,
+        [FromQuery] int? driverId,
+        [FromQuery] string? search,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDir,
+        CancellationToken cancellationToken)
+    {
+        var result = await list.ListAsync(
+            new ShipmentListRequest(page, pageSize, status, createdFrom, createdTo, driverId, search, sortBy, sortDir),
+            cancellationToken);
+
+        switch (result)
+        {
+            case ShipmentListResult.Success success:
+                return success.Page;
+
+            case ShipmentListResult.Invalid invalid:
+                // Same ValidationProblemDetails shape as a binding failure ([ApiController]).
+                foreach (var (parameter, messages) in invalid.Errors)
+                {
+                    foreach (var message in messages)
+                    {
+                        ModelState.AddModelError(parameter, message);
+                    }
+                }
+
+                return ValidationProblem(ModelState);
+
+            default:
+                throw new InvalidOperationException($"Unhandled result {result.GetType().Name}.");
+        }
+    }
+
     /// <summary>
     /// Gets one shipment with its customer, driver and full status history.
     /// </summary>

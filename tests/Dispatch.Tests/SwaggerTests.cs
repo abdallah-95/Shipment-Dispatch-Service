@@ -12,7 +12,7 @@ namespace Dispatch.Tests;
 public sealed class SwaggerTests(TestDatabaseFixture database)
 {
     [Fact]
-    public async Task Enabled_swagger_document_contains_both_routes_and_enums_as_strings()
+    public async Task Enabled_swagger_document_contains_every_route_and_enums_as_strings()
     {
         await using var baseFactory = new ApiFactory(database.ConnectionString);
         await using var factory = baseFactory.WithWebHostBuilder(builder => builder.UseSetting("Swagger:Enabled", "true"));
@@ -23,6 +23,7 @@ public sealed class SwaggerTests(TestDatabaseFixture database)
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var paths = document.RootElement.GetProperty("paths");
+        Assert.True(paths.GetProperty("/api/shipments").TryGetProperty("get", out _));
         Assert.True(paths.GetProperty("/api/shipments/{id}").TryGetProperty("get", out _));
         Assert.True(paths.GetProperty("/api/shipments/{id}/status").TryGetProperty("post", out _));
 

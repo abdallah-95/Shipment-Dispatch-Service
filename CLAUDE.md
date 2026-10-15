@@ -138,10 +138,9 @@ Returned       -> (terminal)
   entities where at least one property OTHER than `SearchText` is modified. A
   SearchText-only change never bumps the version. This rule, not interceptor
   registration order, is what keeps derived data from causing version bumps.
-- Both interceptors implement BOTH `SavingChanges` and `SavingChangesAsync`.
+- Every interceptor implements BOTH `SavingChanges` and `SavingChangesAsync`.
   EF Core does not route one to the other.
-- `SearchTextInterceptor` resolves customer names in ONE batched query, never
-  one query per shipment.
+- There is no `SearchTextInterceptor`. See Search.
 
 ## Banned APIs
 
@@ -155,11 +154,40 @@ Returned       -> (terminal)
 - `SearchText` is a denormalised column on Shipment: tracking number, customer
   name and destination, normalised (lowercase, trimmed, whitespace collapsed).
   The same normalisation function is used when writing and when querying.
-- One SQL Server full-text index on `SearchText`, `STOPLIST = OFF`.
+- `SearchText` is written only by the seeder, using the shared normalisation
+  function. No endpoint creates a shipment or edits a searchable field, so a
+  save-time `SearchTextInterceptor` would never run and is not built. It is the
+  production answer once create or edit endpoints exist.
+- One SQL Server full-text index on `SearchText`, `STOPLIST = OFF`,
+  `LANGUAGE 0` (Neutral). The Neutral word breaker splits on punctuation such as
+  apostrophes (`o'brien` -> `o`, `brien`), which agrees with the query-side split
+  below. The English breaker keeps `o'brien` whole, so `"o*" AND "brien*"` would
+  never match it.
 - The full-text catalog and index are created with raw SQL inside a migration,
   with a matching `Down`.
+- `EF.Functions.Contains` lives in the SQL Server provider, which Application
+  does not reference. `IDispatchDbContext.ShipmentsMatching(condition)` exposes
+  it; Application composes the rest of the query on top.
 - Matching is word-prefix, not substring. Do not implement or claim
   `LIKE '%term%'` semantics.
+
+## Search query rules
+
+One pure function, with no EF dependency, turns the raw `search` string into a
+`CONTAINS` condition, or into a signal meaning "no usable terms".
+
+- Lowercase with the shared normalisation function, then split on every
+  character that is not a letter or a digit. Quotes, hyphens, asterisks and
+  punctuation are separators, so they can never reach the `CONTAINS` syntax.
+- Arabic and other scripts with combining marks are not a requirement. Combining
+  marks are not letters, so they act as separators; do not claim support.
+- Each term becomes a quoted prefix term, and terms are combined with AND:
+  `"al*" AND "rashid*"`. Keywords such as AND, OR and NOT are ordinary terms,
+  because they are quoted.
+- Null or whitespace input: apply no search filter. Input that contains content
+  but no letters or digits: return an empty page.
+- Input over 100 characters (raw length) is a 400 ProblemDetails. At most 8
+  terms are used; any further terms are ignored, like the page-size clamp.
 
 ## List endpoint contract
 
@@ -174,6 +202,19 @@ Returned       -> (terminal)
 - Reject unknown sort fields with 400. Do not silently ignore them.
 - Rows include core fields plus customer name and driver name.
 - Response includes total count. Map to DTOs; never return entities.
+
+## List endpoint decisions
+
+- `status`, `sortBy` and `sortDir` are bound as strings and parsed by name,
+  case-insensitively, in the Application layer. Numeric values (`status=1`) are
+  400, matching the JSON body. Validation errors use the same
+  ValidationProblemDetails shape as binding failures.
+- `createdFrom` / `createdTo` accept only ISO-8601 with `Z` or an explicit
+  offset. No offset, or date only: 400. The range is half-open.
+- `sortBy=status` sorts by the stored name, alphabetically, not workflow order.
+- Input with no usable search terms returns the empty page without querying.
+- A page whose row offset overflows `int` is 400.
+- Count and page are two statements, not one snapshot.
 
 ## Errors
 
@@ -196,8 +237,16 @@ Returned       -> (terminal)
   - `UpdatedAt` equals the last history timestamp
   - `Version` reflects the number of updates
   - `SearchText` populated
-- After inserting, poll `FULLTEXTCATALOGPROPERTY(..., 'PopulateStatus')` until
-  population completes, then exit 0.
+- After inserting, wait until
+  `FULLTEXTCATALOGPROPERTY('ShipmentSearch', 'PopulateStatus') = 0` AND
+  `FULLTEXTCATALOGPROPERTY('ShipmentSearch', 'ItemCount')` equals the number of
+  shipments, bounded at 5 minutes. A status of 0 alone can be read before the
+  background crawl has started. Then run a smoke search: `CONTAINS` for a token
+  known to be seeded must return rows. Timing out or an empty smoke search is a
+  failure. Only then exit 0.
+- The "already seeded" path runs the same wait and smoke search before exiting
+  0 (one query when the index is already populated). This covers a volume that
+  gained the full-text index after it was seeded, and a retry after a failed wait.
 - Exit codes: 0 on success or skip, non-zero on failure.
 
 ## Docker

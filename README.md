@@ -45,7 +45,7 @@ docker compose up --build
 This starts three services in order:
 
 1. `db` – SQL Server 2022 with full-text search. Compose waits until its healthcheck passes.
-2. `seed` – applies the EF Core migrations, loads the sample data, then exits. Compose waits for it to exit successfully.
+2. `seed` – applies the EF Core migrations, loads the sample data, waits until full-text search covers every shipment, then exits. Compose waits for it to exit successfully.
 3. `api` – the Web API, on http://localhost:8080.
 
 The first build takes a couple of minutes (it downloads the base images and the full-text component). Later starts reuse the cache.
@@ -62,13 +62,13 @@ An unknown shipment id returns a 404 `application/problem+json` response. All er
 
 ## Swagger
 
-http://localhost:8080/swagger (and `/` redirects there). It documents both endpoints, their responses and an example request body.
+http://localhost:8080/swagger (and `/` redirects there). It documents every endpoint, its parameters and responses, and an example request body.
 
 Swagger is enabled by the `Swagger:Enabled` setting, which defaults to false. `docker-compose.yml` sets it to true for the local stack (`Swagger__Enabled`). With the setting unset, `/swagger` returns 404.
 
 ## API at a glance
 
-Two endpoints so far. The examples use shipment 47826, which on a freshly seeded database is `Created` at version 0, and driver 1. They change that shipment, so run them in order, and `docker compose down -v` then `docker compose up --build` to start over. `traceId` and `updatedAt` differ on every run. Shell syntax is bash/zsh.
+Getting and changing one shipment. Listing and searching is [further down](#list-and-search-shipments). The examples use shipment 47826, which on a freshly seeded database is `Created` at version 0, and driver 1. They change that shipment, so run them in order, and `docker compose down -v` then `docker compose up --build` to start over. `traceId` and `updatedAt` differ on every run. Shell syntax is bash/zsh.
 
 **Get a shipment** (customer, driver, version and full status history):
 
@@ -129,6 +129,103 @@ What the error codes mean (all are `application/problem+json`):
 | 409 | `expectedVersion` is not the shipment's current version, or a concurrent request got there first. The body has `currentStatus`, `currentVersion` and `allowedTransitions`. Re-read and retry. |
 | 422 | The request is well-formed but not allowed: an illegal transition, or `PickedUp` without the id of an existing driver. For an illegal transition the body has `currentStatus` and `allowedTransitions`. |
 
+## List and search shipments
+
+`GET /api/shipments` returns one page of shipments, newest first unless you choose another sort.
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `page` | 1 | 1-based page number. |
+| `pageSize` | 25 | Rows per page. Values above 100 are clamped to 100; the response says which size was used. |
+| `status` | | Only this status: `Created`, `PickedUp`, `InTransit`, `OutForDelivery`, `Delivered`, `Failed` or `Returned` (case-insensitive). |
+| `createdFrom` | | Only shipments created at or after this instant. |
+| `createdTo` | | Only shipments created before this instant (exclusive). |
+| `driverId` | | Only shipments assigned to this driver. |
+| `search` | | Words to find in the tracking number, customer name and destination. See [Search](#search). |
+| `sortBy` | `createdAt` | `createdAt`, `updatedAt`, `status`, `trackingNumber`, `customerName` or `destination`. `status` sorts by name, alphabetically. |
+| `sortDir` | `desc` | `asc` or `desc`. |
+
+Filters combine with AND. Every sort ends with the shipment id in the same direction, so rows with equal sort values always come back in the same order and paging never skips or repeats a row.
+
+Dates are ISO-8601 instants with `Z` or an offset, such as `2026-01-01T00:00:00Z`. A value without an offset is rejected, not guessed. In a query string `+` means a space, so send `+02:00` as `%2B02:00`.
+
+The response is `{"items":[...],"page":1,"pageSize":25,"totalCount":50000}`. `totalCount` counts every shipment matching the filters, not just this page. Each item has `id`, `trackingNumber`, `customerId`, `customerName`, `driverId`, `driverName` (both null until the shipment is picked up), `origin`, `destination`, `weightKg`, `status`, `createdAt`, `updatedAt` and `version`.
+
+A 400 `application/problem+json` response, with `errors` keyed by parameter name, means:
+
+- `page` or `pageSize` is below 1 or not a number, or `page` is so large that the row offset overflows
+- `status`, `sortBy` or `sortDir` is not one of the values above (a number such as `status=1` is rejected too)
+- `createdFrom` or `createdTo` is not an instant with an offset, or `createdFrom` is after `createdTo`
+- `search` is longer than 100 characters
+
+### Search
+
+- **Word prefix, not substring.** Each word you type must match the start of a word in the tracking number, customer name or destination. `port` finds "Port Said" and "Portsmouth"; `ort` finds nothing.
+- **All words must match**, in any order: `cedar port` finds shipments with a word starting `cedar` and a word starting `port`.
+- Case does not matter. Anything that is not a letter or digit separates words, so quotes, hyphens and `*` have no special meaning, and `AND`, `OR` and `NOT` are searched for as ordinary words.
+- At most 100 characters, and only the first 8 words are used. A search with no letters or digits (such as `--`) returns an empty page.
+
+### Examples
+
+Shell syntax is bash/zsh. These read only, and are not affected by the status-change examples above.
+
+A filtered list: shipments out for delivery, by customer name.
+
+```
+curl -s -w '\nHTTP %{http_code}\n' 'http://localhost:8080/api/shipments?status=OutForDelivery&sortBy=customerName&sortDir=asc&pageSize=2'
+```
+
+```
+{"items":[{"id":45912,"trackingNumber":"DSP10045912","customerId":3323,"customerName":"Alpine Cosmetics Corp","driverId":158,"driverName":"Gabriel Quinn","origin":"Junction Hub","destination":"South Bend","weightKg":0.17,"status":"OutForDelivery","createdAt":"2026-09-27T10:53:44Z","updatedAt":"2026-09-30T17:42:39Z","version":3},{"id":45691,"trackingNumber":"DSP10045691","customerId":4791,"customerName":"Alpine Hardware & Sons","driverId":175,"driverName":"Chloe Garcia","origin":"Riverside Hub","destination":"Fort Worth","weightKg":34.60,"status":"OutForDelivery","createdAt":"2026-09-27T02:16:00Z","updatedAt":"2026-09-30T21:12:17Z","version":3}],"page":1,"pageSize":2,"totalCount":151}
+HTTP 200
+```
+
+A search:
+
+```
+curl -s -w '\nHTTP %{http_code}\n' 'http://localhost:8080/api/shipments?search=cedar%20port&pageSize=2'
+```
+
+```
+{"items":[{"id":49908,"trackingNumber":"DSP10049908","customerId":3010,"customerName":"Cedar Hardware GmbH","driverId":null,"driverName":null,"origin":"Midtown Depot","destination":"Port Louis","weightKg":19.30,"status":"Created","createdAt":"2026-09-30T23:57:38Z","updatedAt":"2026-09-30T23:57:38Z","version":0},{"id":49870,"trackingNumber":"DSP10049870","customerId":682,"customerName":"Cedar Furniture LLC","driverId":null,"driverName":null,"origin":"Midtown Depot","destination":"Port Elizabeth","weightKg":16.78,"status":"Created","createdAt":"2026-09-30T23:56:07Z","updatedAt":"2026-09-30T23:56:07Z","version":0}],"page":1,"pageSize":2,"totalCount":241}
+HTTP 200
+```
+
+A search combined with filters:
+
+```
+curl -s -w '\nHTTP %{http_code}\n' 'http://localhost:8080/api/shipments?search=cedar%20port&status=Delivered&createdFrom=2026-01-01T00:00:00Z&createdTo=2026-07-01T00:00:00Z&pageSize=2'
+```
+
+```
+{"items":[{"id":29260,"trackingNumber":"DSP10029260","customerId":1394,"customerName":"Cedar Glassworks Holdings","driverId":33,"driverName":"Carlos Nguyen","origin":"Eastside Depot","destination":"Portsmouth","weightKg":30.12,"status":"Delivered","createdAt":"2026-06-27T20:01:08Z","updatedAt":"2026-07-01T07:15:53Z","version":4},{"id":28933,"trackingNumber":"DSP10028933","customerId":2189,"customerName":"Cedarview Tools Partners","driverId":165,"driverName":"Amara Quinn","origin":"Lakeside Depot","destination":"Port Elizabeth","weightKg":17.00,"status":"Delivered","createdAt":"2026-06-24T21:13:36Z","updatedAt":"2026-06-27T11:33:57Z","version":4}],"page":1,"pageSize":2,"totalCount":66}
+HTTP 200
+```
+
+Part of a word is not a match:
+
+```
+curl -s -w '\nHTTP %{http_code}\n' 'http://localhost:8080/api/shipments?search=ort&pageSize=1'
+```
+
+```
+{"items":[],"page":1,"pageSize":1,"totalCount":0}
+HTTP 200
+```
+
+An invalid parameter (`traceId` differs on every run):
+
+```
+curl -s -w '\nHTTP %{http_code}\n' 'http://localhost:8080/api/shipments?sortBy=weight'
+```
+
+```
+{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.1","title":"One or more validation errors occurred.","status":400,"errors":{"sortBy":["sortBy must be one of: createdAt, updatedAt, status, trackingNumber, customerName, destination."]},"traceId":"00-8ff9e4f648960cd11c16e95d26ef03e1-cdb6bdcba73087bd-00"}
+HTTP 400
+```
+
+Measured on the full seeded dataset (50,000 shipments) on the development machine, every list and search request took under 32 ms server-side (count and page together, median of 10 warm runs). The default sort and the created-date range are served by the `(CreatedAt, Id)` index; full-text search uses the `ShipmentSearch` catalog. The measurement write-up is kept locally and is not part of the repository.
+
 ## Status workflow
 
 | From | Can move to |
@@ -158,7 +255,9 @@ No skipping states and no re-entering a state.
 
 Seeding is its own step: the API never migrates or seeds. The `seed` service creates 5,000 customers, 200 drivers and 50,000 shipments with their status history, using a fixed random seed, so the data is identical on every machine.
 
-It is idempotent. If shipments already exist it logs `already seeded, skipping` and exits 0, so restarting the stack is safe. There is no reset command. To start over, delete the database volume:
+After loading, the seeder waits until the full-text index covers every shipment, then runs a test search, and only then exits; the API starts after that, so the first search already sees every shipment. On a fresh database the wait took 34 seconds on the development machine (16 CPUs given to Docker). If the index is not complete within 5 minutes, or the test search finds nothing, the seeder exits non-zero and the API does not start.
+
+It is idempotent. If shipments already exist it logs `already seeded, skipping`, repeats the full-text check (immediate once the index is complete), and exits 0, so restarting the stack is safe. There is no reset command. To start over, delete the database volume:
 
 ```
 docker compose down -v

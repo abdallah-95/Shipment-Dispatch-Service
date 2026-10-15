@@ -15,6 +15,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<Shipment> Shipments => Set<Shipment>();
     public DbSet<ShipmentStatusHistory> ShipmentStatusHistory => Set<ShipmentStatusHistory>();
 
+    public IQueryable<Shipment> ShipmentsMatching(string containsCondition) =>
+        Shipments.Where(s => EF.Functions.Contains(s.SearchText, containsCondition));
+
     protected override void OnModelCreating(ModelBuilder modelBuilder) =>
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
 }

@@ -122,6 +122,8 @@ namespace Dispatch.Infrastructure.Migrations
                     b.HasIndex("TrackingNumber")
                         .IsUnique();
 
+                    b.HasIndex("CreatedAt", "Id");
+
                     b.ToTable("Shipments", (string)null);
                 });
 

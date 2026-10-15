@@ -5,6 +5,14 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Dispatch.Tests;
 
+/// <summary>The fields of a list-test shipment that the list endpoint filters, sorts and searches on.</summary>
+internal sealed record ListRow(
+    ShipmentStatus Status,
+    DateTime CreatedAt,
+    string CustomerName,
+    int? DriverId,
+    string Destination = "Alexandria");
+
 /// <summary>Creates each test's own rows. Nothing here reads the seeded dataset.</summary>
 internal static class TestData
 {
@@ -54,6 +62,65 @@ internal static class TestData
         db.Shipments.Add(shipment);
         await db.SaveChangesAsync();
         return shipment;
+    }
+
+    /// <summary>
+    /// Inserts shipments for list tests, each with the complete history chain to its status. Rows that
+    /// share a customer name share one customer. <see cref="ListRow.DriverId"/> must name a saved driver
+    /// for every status except Created, as it would in real data.
+    /// </summary>
+    public static async Task<List<Shipment>> CreateListShipmentsAsync(TestDatabaseFixture database, IEnumerable<ListRow> rows)
+    {
+        var customers = new Dictionary<string, Customer>();
+        var shipments = new List<Shipment>();
+
+        foreach (var row in rows)
+        {
+            if ((row.Status == ShipmentStatus.Created) != (row.DriverId is null))
+            {
+                throw new ArgumentException("A shipment has a driver exactly when it is past Created.", nameof(rows));
+            }
+
+            if (!customers.TryGetValue(row.CustomerName, out var customer))
+            {
+                customer = new Customer { Name = row.CustomerName };
+                customers.Add(row.CustomerName, customer);
+            }
+
+            var trackingNumber = $"TST{Guid.NewGuid():N}"[..32]; // column is varchar(32)
+            var path = PathTo(row.Status);
+            var shipment = new Shipment
+            {
+                TrackingNumber = trackingNumber,
+                Customer = customer,
+                DriverId = row.DriverId,
+                Origin = "Central Hub",
+                Destination = row.Destination,
+                WeightKg = 1.5m,
+                Status = row.Status,
+                CreatedAt = row.CreatedAt,
+                UpdatedAt = row.CreatedAt.AddHours(path.Count - 1),
+                Version = path.Count - 1,
+                SearchText = SearchTextNormalizer.Build(trackingNumber, row.CustomerName, row.Destination),
+            };
+
+            for (var i = 0; i < path.Count; i++)
+            {
+                shipment.History.Add(new ShipmentStatusHistory
+                {
+                    FromStatus = i == 0 ? null : path[i - 1],
+                    ToStatus = path[i],
+                    ChangedAt = row.CreatedAt.AddHours(i),
+                });
+            }
+
+            shipments.Add(shipment);
+        }
+
+        await using var db = database.CreateDbContext();
+        db.Shipments.AddRange(shipments);
+        await db.SaveChangesAsync();
+        return shipments;
     }
 
     public static async Task<Driver> CreateDriverAsync(TestDatabaseFixture database)
