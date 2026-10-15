@@ -16,10 +16,9 @@ public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<App
             Environment.GetEnvironmentVariable($"ConnectionStrings__{DependencyInjection.ConnectionStringName}")
             ?? "Server=localhost;Database=Dispatch;Integrated Security=true;TrustServerCertificate=True";
 
-        var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlServer(connectionString)
-            .Options;
+        var options = new DbContextOptionsBuilder<AppDbContext>();
+        DependencyInjection.ConfigureDbContext(options, connectionString);
 
-        return new AppDbContext(options);
+        return new AppDbContext(options.Options);
     }
 }

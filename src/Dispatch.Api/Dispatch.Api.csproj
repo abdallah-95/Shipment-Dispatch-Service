@@ -5,5 +5,12 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" />
+    <PackageReference Include="Swashbuckle.AspNetCore" />
   </ItemGroup>
+  <PropertyGroup>
+    <!-- Swagger summaries come from the controller's XML doc comments. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Only the doc comments that feed Swagger are written: not every member (CS1591) or every parameter (CS1573). -->
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
+  </PropertyGroup>
 </Project>
