@@ -1,10 +1,22 @@
 using Dispatch.Api.Json;
+using Dispatch.Api.Middleware;
 using Dispatch.Api.Swagger;
 using Dispatch.Application;
 using Dispatch.Infrastructure;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Serilog;
+using Serilog.Events;
+using Serilog.Formatting.Compact;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Compact JSON to the console. Levels come from the "Serilog" configuration section; ReadFrom.Services
+// adds any ILogEventSink registered in DI (the tests register an in-memory one).
+builder.Services.AddSerilog((services, logger) => logger
+    .ReadFrom.Configuration(services.GetRequiredService<IConfiguration>())
+    .ReadFrom.Services(services)
+    .Enrich.FromLogContext()
+    .WriteTo.Console(new CompactJsonFormatter()));
 
 var connectionString = builder.Configuration.GetConnectionString(DependencyInjection.ConnectionStringName)
     ?? throw new InvalidOperationException(
@@ -21,7 +33,15 @@ builder.Services
 
 // Every error response is ProblemDetails: validation failures ([ApiController]), unhandled
 // exceptions (UseExceptionHandler) and bare status codes such as route misses (UseStatusCodePages).
-builder.Services.AddProblemDetails();
+// The customisation runs for all of them, including the ones controllers build with Problem(), so
+// every error body carries the correlationId that is also on the response header.
+builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
+{
+    if (CorrelationIdMiddleware.Get(context.HttpContext) is { } correlationId)
+    {
+        context.ProblemDetails.Extensions["correlationId"] = correlationId;
+    }
+});
 
 // Off unless Swagger:Enabled is true (compose sets it for the local stack).
 var swaggerEnabled = builder.Configuration.IsEnabled();
@@ -36,6 +56,20 @@ builder.Services.AddHealthChecks()
 
 var app = builder.Build();
 
+// Order matters. The correlation id comes first, so every later log line (the request line included)
+// carries it. The exception handler sits inside request logging, so an exception is logged once, by
+// the handler, and request logging sees only the 500 it produced.
+app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseSerilogRequestLogging(options =>
+{
+    // Probes call the health endpoints every few seconds. Their request lines are Debug, below the
+    // minimum level; a failing check is still logged, by the health check service.
+    var defaultLevel = options.GetLevel;
+    options.GetLevel = (context, elapsedMs, exception) =>
+        context.Request.Path.StartsWithSegments("/health")
+            ? LogEventLevel.Debug
+            : defaultLevel(context, elapsedMs, exception);
+});
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 

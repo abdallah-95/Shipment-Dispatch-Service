@@ -1,10 +1,17 @@
 using Dispatch.Domain;
 using Dispatch.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Dispatch.Application.Shipments;
 
-public sealed class ShipmentStatusService(IDispatchDbContext db, TimeProvider timeProvider) : IShipmentStatusService
+/// <remarks>
+/// Business log lines identify the shipment by ShipmentId only, never by tracking number or customer.
+/// </remarks>
+public sealed class ShipmentStatusService(
+    IDispatchDbContext db,
+    TimeProvider timeProvider,
+    ILogger<ShipmentStatusService> logger) : IShipmentStatusService
 {
     public async Task<ChangeStatusResult> ChangeStatusAsync(
         int shipmentId,
@@ -29,11 +36,15 @@ public sealed class ShipmentStatusService(IDispatchDbContext db, TimeProvider ti
         // transition it would not have asked for had it seen that state.
         if (shipment.Version != expectedVersion)
         {
-            return Conflict(shipment.Status, shipment.Version);
+            return Conflict(shipmentId, expectedVersion, shipment.Status, shipment.Version);
         }
 
         if (!ShipmentTransitions.IsAllowed(shipment.Status, targetStatus))
         {
+            logger.LogInformation(
+                "Illegal status transition for shipment {ShipmentId} from {FromStatus} to {RequestedStatus}",
+                shipmentId, shipment.Status, targetStatus);
+
             return new ChangeStatusResult.IllegalTransition(
                 shipment.Status, targetStatus, ShipmentTransitions.AllowedFrom(shipment.Status));
         }
@@ -91,13 +102,25 @@ public sealed class ShipmentStatusService(IDispatchDbContext db, TimeProvider ti
 
             return current is null
                 ? new ChangeStatusResult.NotFound()
-                : Conflict(current.Status, current.Version);
+                : Conflict(shipmentId, expectedVersion, current.Status, current.Version);
         }
+
+        logger.LogInformation(
+            "Shipment {ShipmentId} status changed from {FromStatus} to {ToStatus}, new version {NewVersion}",
+            shipment.Id, fromStatus, shipment.Status, shipment.Version);
 
         return new ChangeStatusResult.Success(new ShipmentStatusChangedDto(
             shipment.Id, shipment.Status, shipment.DriverId, shipment.UpdatedAt, shipment.Version));
     }
 
-    private static ChangeStatusResult.VersionConflict Conflict(ShipmentStatus status, int version) =>
-        new(status, version, ShipmentTransitions.AllowedFrom(status));
+    /// <summary>Both conflict paths: the version check after load, and losing the race at save.</summary>
+    private ChangeStatusResult.VersionConflict Conflict(
+        int shipmentId, int expectedVersion, ShipmentStatus currentStatus, int currentVersion)
+    {
+        logger.LogWarning(
+            "Version conflict on shipment {ShipmentId}: expected version {ExpectedVersion}, current version {CurrentVersion}",
+            shipmentId, expectedVersion, currentVersion);
+
+        return new(currentStatus, currentVersion, ShipmentTransitions.AllowedFrom(currentStatus));
+    }
 }

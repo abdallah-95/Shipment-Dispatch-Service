@@ -68,7 +68,7 @@ Swagger is enabled by the `Swagger:Enabled` setting, which defaults to false. `d
 
 ## API at a glance
 
-Getting and changing one shipment. Listing and searching is [further down](#list-and-search-shipments). The examples use shipment 47826, which on a freshly seeded database is `Created` at version 0, and driver 1. They change that shipment, so run them in order, and `docker compose down -v` then `docker compose up --build` to start over. `traceId` and `updatedAt` differ on every run. Shell syntax is bash/zsh.
+Getting and changing one shipment. Listing and searching is [further down](#list-and-search-shipments). The examples use shipment 47826, which on a freshly seeded database is `Created` at version 0, and driver 1. They change that shipment, so run them in order, and `docker compose down -v` then `docker compose up --build` to start over. `traceId`, `correlationId` and `updatedAt` differ on every run. Shell syntax is bash/zsh.
 
 **Get a shipment** (customer, driver, version and full status history):
 
@@ -90,7 +90,7 @@ curl -s -w '\nHTTP %{http_code}\n' -X POST http://localhost:8080/api/shipments/4
 ```
 
 ```
-{"id":47826,"status":"PickedUp","driverId":1,"updatedAt":"2026-10-15T14:05:49.6547241Z","version":1}
+{"id":47826,"status":"PickedUp","driverId":1,"updatedAt":"2026-10-16T04:41:21.5826874Z","version":1}
 HTTP 200
 ```
 
@@ -103,7 +103,7 @@ curl -s -w '\nHTTP %{http_code}\n' -X POST http://localhost:8080/api/shipments/4
 ```
 
 ```
-{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.10","title":"Version conflict","status":409,"detail":"Shipment 47826 is at version 1, not 0. Re-read it and retry.","traceId":"00-b705f35b85e691f3c38181fd86e8b691-3a8ff524cf5504ae-00","currentStatus":"PickedUp","currentVersion":1,"allowedTransitions":["InTransit"]}
+{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.10","title":"Version conflict","status":409,"detail":"Shipment 47826 is at version 1, not 0. Re-read it and retry.","traceId":"00-f69526efc91f2511b08a51746442abbd-0a15624436853dae-00","correlationId":"f69526efc91f2511b08a51746442abbd","currentStatus":"PickedUp","currentVersion":1,"allowedTransitions":["InTransit"]}
 HTTP 409
 ```
 
@@ -116,7 +116,7 @@ curl -s -w '\nHTTP %{http_code}\n' -X POST http://localhost:8080/api/shipments/4
 ```
 
 ```
-{"type":"https://tools.ietf.org/html/rfc4918#section-11.2","title":"Illegal status transition","status":422,"detail":"Shipment 47826 cannot move from PickedUp to Delivered.","traceId":"00-7d29b560f162ae1493f20267052a858b-b6c7736cb49021f6-00","currentStatus":"PickedUp","allowedTransitions":["InTransit"]}
+{"type":"https://tools.ietf.org/html/rfc4918#section-11.2","title":"Illegal status transition","status":422,"detail":"Shipment 47826 cannot move from PickedUp to Delivered.","traceId":"00-0a90c672a1ba22746c2b3bf0625bdd74-27a7fff2382ecd04-00","correlationId":"0a90c672a1ba22746c2b3bf0625bdd74","currentStatus":"PickedUp","allowedTransitions":["InTransit"]}
 HTTP 422
 ```
 
@@ -128,6 +128,9 @@ What the error codes mean (all are `application/problem+json`):
 | 404 | No shipment with that id. |
 | 409 | `expectedVersion` is not the shipment's current version, or a concurrent request got there first. The body has `currentStatus`, `currentVersion` and `allowedTransitions`. Re-read and retry. |
 | 422 | The request is well-formed but not allowed: an illegal transition, or `PickedUp` without the id of an existing driver. For an illegal transition the body has `currentStatus` and `allowedTransitions`. |
+| 500 | An unexpected error. The body is deliberately generic: no exception message or stack trace. |
+
+Every error body has a `correlationId`, the same value as the `X-Correlation-Id` response header. Quote it when reporting a problem; it finds every log line for the request (see [Finding a request in the logs](#finding-a-request-in-the-logs)).
 
 ## List and search shipments
 
@@ -213,18 +216,115 @@ curl -s -w '\nHTTP %{http_code}\n' 'http://localhost:8080/api/shipments?search=o
 HTTP 200
 ```
 
-An invalid parameter (`traceId` differs on every run):
+An invalid parameter (`traceId` and `correlationId` differ on every run):
 
 ```
 curl -s -w '\nHTTP %{http_code}\n' 'http://localhost:8080/api/shipments?sortBy=weight'
 ```
 
 ```
-{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.1","title":"One or more validation errors occurred.","status":400,"errors":{"sortBy":["sortBy must be one of: createdAt, updatedAt, status, trackingNumber, customerName, destination."]},"traceId":"00-8ff9e4f648960cd11c16e95d26ef03e1-cdb6bdcba73087bd-00"}
+{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.1","title":"One or more validation errors occurred.","status":400,"errors":{"sortBy":["sortBy must be one of: createdAt, updatedAt, status, trackingNumber, customerName, destination."]},"traceId":"00-9fa73376bfb2477972cf194905395bcb-d2e388786f5c79fc-00","correlationId":"9fa73376bfb2477972cf194905395bcb"}
 HTTP 400
 ```
 
 Measured on the full seeded dataset (50,000 shipments) on the development machine, every list and search request took under 32 ms server-side (count and page together, median of 10 warm runs). The default sort and the created-date range are served by the `(CreatedAt, Id)` index; full-text search uses the `ShipmentSearch` catalog. The measurement write-up is kept locally and is not part of the repository.
+
+## Dashboard
+
+`GET /api/dashboard/summary` counts shipments by status:
+
+```
+curl -s -w '\nHTTP %{http_code}\n' http://localhost:8080/api/dashboard/summary
+```
+
+```
+{"total":50000,"byStatus":[{"status":"Created","count":1532},{"status":"PickedUp","count":1594},{"status":"InTransit","count":729},{"status":"OutForDelivery","count":151},{"status":"Delivered","count":41157},{"status":"Failed","count":2708},{"status":"Returned","count":2129}]}
+HTTP 200
+```
+
+This is after the status-change examples above, which move shipment 47826 from `Created` to `PickedUp`. On a freshly seeded database `Created` is 1533 and `PickedUp` 1593.
+
+- `byStatus` always has all seven statuses, in workflow order, with 0 for a status no shipment is in.
+- `total` is the sum of `byStatus`.
+- The counts come from one `GROUP BY` query in the database, run on every request. Nothing is cached.
+
+Measured on the full seeded dataset (50,000 shipments) on the development machine: a median of 12.3 ms server-side over 10 warm runs, of which the query took 11 ms.
+
+## Health checks
+
+| Endpoint | Checks | Answer |
+| --- | --- | --- |
+| `/health/live` | Nothing beyond the process answering. | 200 `Healthy` while the API is running. |
+| `/health/ready` | Opens a connection to SQL Server. | 200 `Healthy`, or 503 `Unhealthy` when SQL Server cannot be reached. |
+
+```
+curl -s -w '\nHTTP %{http_code}\n' http://localhost:8080/health/live
+curl -s -w '\nHTTP %{http_code}\n' http://localhost:8080/health/ready
+```
+
+```
+Healthy
+HTTP 200
+Healthy
+HTTP 200
+```
+
+With the database stopped, `ready` returns 503 and `live` stays 200:
+
+```
+docker compose stop db
+curl -s -w '\nHTTP %{http_code} in %{time_total}s\n' http://localhost:8080/health/ready
+docker compose start db
+```
+
+```
+Unhealthy
+HTTP 503 in 16.268414s
+```
+
+The first failing check takes about 16 seconds, because it waits for SqlClient's default 15-second connect timeout. For a few seconds after that, failing checks return 503 in a few milliseconds, because SqlClient briefly remembers the failed connection. After `docker compose start db`, `ready` returns 200 again without restarting the API.
+
+Health check requests write no request line: it is logged at Debug, below the minimum level. A failing check is logged at Error. Each `/health/ready` call still logs the `SELECT 1` it runs, as an EF Core SQL line at Information.
+
+## Finding a request in the logs
+
+The API writes one JSON object per line to the console. `@t` is the time, `@mt` the message template, `@l` the level (left out for Information), and `@x` the exception, if there is one. The named properties follow. Each request writes one request line (method, path, status code, elapsed milliseconds), plus any business events, such as a status change, a version conflict or an illegal transition, and the SQL it ran. SQL parameter values are never logged; they show as `?`. Query strings are not logged either.
+
+Every response carries an `X-Correlation-Id` header, and every line logged for that request carries the same value as `CorrelationId`. It is the W3C trace id: if the request sends a `traceparent` header, the id comes from it; otherwise a new one is generated. Error bodies repeat it as `correlationId`.
+
+A stale status change sent with a known `traceparent`:
+
+```
+curl -s -i -X POST http://localhost:8080/api/shipments/47826/status \
+  -H 'Content-Type: application/json' \
+  -H 'traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' \
+  -d '{"status":"InTransit","expectedVersion":0}'
+```
+
+```
+HTTP/1.1 409 Conflict
+Content-Type: application/problem+json; charset=utf-8
+Date: Fri, 16 Oct 2026 04:41:51 GMT
+Server: Kestrel
+Transfer-Encoding: chunked
+X-Correlation-Id: 4bf92f3577b34da6a3ce929d0e0e4736
+
+{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.10","title":"Version conflict","status":409,"detail":"Shipment 47826 is at version 1, not 0. Re-read it and retry.","traceId":"00-4bf92f3577b34da6a3ce929d0e0e4736-9e494b6501579259-01","correlationId":"4bf92f3577b34da6a3ce929d0e0e4736","currentStatus":"PickedUp","currentVersion":1,"allowedTransitions":["InTransit"]}
+```
+
+Every log line for that request. `--no-log-prefix` drops compose's `api-1 |` prefix, so each line is plain JSON:
+
+```
+docker compose logs --no-log-prefix api | grep 4bf92f3577b34da6a3ce929d0e0e4736
+```
+
+```
+{"@t":"2026-10-16T04:41:51.9899761Z","@mt":"Executed DbCommand ({elapsed}ms) [Parameters=[{parameters}], CommandType='{commandType}', CommandTimeout='{commandTimeout}']{newLine}{commandText}","@tr":"4bf92f3577b34da6a3ce929d0e0e4736","@sp":"9e494b6501579259","elapsed":"1","parameters":"@__shipmentId_0='?' (DbType = Int32)","commandType":"Text","commandTimeout":30,"newLine":"\n","commandText":"SELECT TOP(2) [s].[Id], [s].[CreatedAt], [s].[CustomerId], [s].[Destination], [s].[DriverId], [s].[Origin], [s].[SearchText], [s].[Status], [s].[TrackingNumber], [s].[UpdatedAt], [s].[Version], [s].[WeightKg]\nFROM [Shipments] AS [s]\nWHERE [s].[Id] = @__shipmentId_0","EventId":{"Id":20101,"Name":"Microsoft.EntityFrameworkCore.Database.Command.CommandExecuted"},"SourceContext":"Microsoft.EntityFrameworkCore.Database.Command","ActionId":"b4fc1db5-41da-4f88-9e99-38e05367c5ba","ActionName":"Dispatch.Api.Controllers.ShipmentsController.ChangeStatus (Dispatch.Api)","RequestId":"0HNPB7U603OTF:00000001","RequestPath":"/api/shipments/47826/status","ConnectionId":"0HNPB7U603OTF","CorrelationId":"4bf92f3577b34da6a3ce929d0e0e4736"}
+{"@t":"2026-10-16T04:41:51.9902313Z","@mt":"Version conflict on shipment {ShipmentId}: expected version {ExpectedVersion}, current version {CurrentVersion}","@l":"Warning","@tr":"4bf92f3577b34da6a3ce929d0e0e4736","@sp":"9e494b6501579259","ShipmentId":47826,"ExpectedVersion":0,"CurrentVersion":1,"SourceContext":"Dispatch.Application.Shipments.ShipmentStatusService","ActionId":"b4fc1db5-41da-4f88-9e99-38e05367c5ba","ActionName":"Dispatch.Api.Controllers.ShipmentsController.ChangeStatus (Dispatch.Api)","RequestId":"0HNPB7U603OTF:00000001","RequestPath":"/api/shipments/47826/status","ConnectionId":"0HNPB7U603OTF","CorrelationId":"4bf92f3577b34da6a3ce929d0e0e4736"}
+{"@t":"2026-10-16T04:41:51.9904417Z","@mt":"HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms","@r":["3.0863"],"@tr":"4bf92f3577b34da6a3ce929d0e0e4736","@sp":"9e494b6501579259","RequestMethod":"POST","RequestPath":"/api/shipments/47826/status","StatusCode":409,"Elapsed":3.086347,"SourceContext":"Serilog.AspNetCore.RequestLoggingMiddleware","CorrelationId":"4bf92f3577b34da6a3ce929d0e0e4736","RequestId":"0HNPB7U603OTF:00000001","ConnectionId":"0HNPB7U603OTF"}
+```
+
+Log levels are set in the `Serilog` section of `src/Dispatch.Api/appsettings.json`: Information by default, Warning for `Microsoft.AspNetCore`.
 
 ## Status workflow
 

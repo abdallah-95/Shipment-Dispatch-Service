@@ -216,6 +216,14 @@ One pure function, with no EF dependency, turns the raw `search` string into a
 - A page whose row offset overflows `int` is 400.
 - Count and page are two statements, not one snapshot.
 
+## Dashboard
+
+`GET /api/dashboard/summary` returns `{total, byStatus: [{status, count}]}`.
+
+- `byStatus` has all seven statuses, in workflow order, zero-filled.
+- The counts come from a single `GROUP BY` executed in the database, never from
+  materialising shipments.
+
 ## Errors
 
 - All error responses are RFC 7807 ProblemDetails, including 409.
@@ -274,7 +282,12 @@ One pure function, with no EF dependency, turns the raw `search` string into a
 - Correlation id middleware: take W3C `traceparent` if present, else generate.
   Push it into the log context. Return it on the response header.
 - `/health/live` (process up) and `/health/ready` (includes a SQL Server check).
+- Unhandled exceptions return a 500 ProblemDetails with no stack trace or
+  exception detail, and are logged once, with the exception and the
+  correlation id.
 - Never log personal data beyond what is needed to identify a record.
+- EF Core sensitive-data logging stays off.
+- Business log lines identify a shipment by `ShipmentId` only.
 
 ## Tests
 

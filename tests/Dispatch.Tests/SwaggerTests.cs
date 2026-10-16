@@ -26,6 +26,7 @@ public sealed class SwaggerTests(TestDatabaseFixture database)
         Assert.True(paths.GetProperty("/api/shipments").TryGetProperty("get", out _));
         Assert.True(paths.GetProperty("/api/shipments/{id}").TryGetProperty("get", out _));
         Assert.True(paths.GetProperty("/api/shipments/{id}/status").TryGetProperty("post", out _));
+        Assert.True(paths.GetProperty("/api/dashboard/summary").TryGetProperty("get", out _));
 
         var status = document.RootElement.GetProperty("components").GetProperty("schemas").GetProperty("ShipmentStatus");
         Assert.Equal("string", status.GetProperty("type").GetString());
