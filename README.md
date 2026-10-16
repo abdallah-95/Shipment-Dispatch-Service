@@ -6,36 +6,6 @@ The only prerequisite is Docker with Compose v2. No .NET SDK, SQL Server, or con
 
 Platform note: the SQL Server image is amd64-only. On Apple Silicon, enable Rosetta in Docker Desktop.
 
-## Everything in one command
-
-Build and start the stack, wait until the database is seeded and the API is up, then run the tests:
-
-```
-docker compose up --build -d --wait && docker compose --profile tests run --rm --build tests
-```
-
-The stack keeps running afterwards. The command's exit code is the test result, and the tests are skipped if the stack fails to come up. The two halves are described separately below.
-
-Needs `&&`, so use bash, zsh, cmd, or PowerShell 7+. In Windows PowerShell 5.1, run the two commands on separate lines.
-
-### Run everything, then stop the stack
-
-Same as above, but the stack is stopped and removed at the end, whether or not the tests passed. The database volume is kept, so the next start skips seeding.
-
-bash / zsh (the parentheses keep `exit` from closing your shell; the exit code is the test result):
-
-```
-(docker compose up --build -d --wait && docker compose --profile tests run --rm --build tests; status=$?; docker compose down; exit $status)
-```
-
-Windows PowerShell:
-
-```
-docker compose up --build -d --wait; if ($LASTEXITCODE -eq 0) { docker compose --profile tests run --rm --build tests }; docker compose down
-```
-
-Add `-v` to `docker compose down` to also delete the database volume.
-
 ## Start the service
 
 ```
@@ -59,6 +29,53 @@ curl http://localhost:8080/api/shipments/1  # a seeded shipment, with customer, 
 ```
 
 An unknown shipment id returns a 404 `application/problem+json` response. All error responses are ProblemDetails.
+
+## Run the tests
+
+```
+docker compose --profile tests run --rm tests
+```
+
+The tests run inside a Linux container against the same `db` service (only `db` is started; `seed` and `api` are not needed). Each run creates its own `dispatch_test_<guid>` database, applies the migrations, and drops it at the end. Tests create their own data and never read the seeded dataset. The command's exit code is the test result, so it works in scripts and CI.
+
+A plain `docker compose up` never runs the tests.
+
+## Everything in one command
+
+Build and start the stack, wait until the database is seeded and the API is up, then run the tests:
+
+```
+docker compose up --build -d --wait && docker compose --profile tests run --rm --build tests
+```
+
+The stack keeps running afterwards. The command's exit code is the test result, and the tests are skipped if the stack fails to come up. The two halves are described separately above.
+
+Needs `&&`, so use bash, zsh, cmd, or PowerShell 7+. In Windows PowerShell 5.1, run the two commands on separate lines.
+
+### Run everything, then stop the stack
+
+Same as above, but the stack is stopped and removed at the end, whether or not the tests passed. The database volume is kept, so the next start skips seeding.
+
+bash / zsh (the parentheses keep `exit` from closing your shell; the exit code is the test result):
+
+```
+(docker compose up --build -d --wait && docker compose --profile tests run --rm --build tests; status=$?; docker compose down; exit $status)
+```
+
+Windows PowerShell:
+
+```
+docker compose up --build -d --wait; if ($LASTEXITCODE -eq 0) { docker compose --profile tests run --rm --build tests }; docker compose down
+```
+
+Add `-v` to `docker compose down` to also delete the database volume.
+
+## Stop
+
+```
+docker compose down       # stop and remove containers, keep the data
+docker compose down -v    # also delete the database volume
+```
 
 ## Swagger
 
@@ -227,7 +244,7 @@ curl -s -w '\nHTTP %{http_code}\n' 'http://localhost:8080/api/shipments?sortBy=w
 HTTP 400
 ```
 
-Measured on the full seeded dataset (50,000 shipments) on the development machine, every list and search request took under 32 ms server-side (count and page together, median of 10 warm runs). The default sort and the created-date range are served by the `(CreatedAt, Id)` index; full-text search uses the `ShipmentSearch` catalog. The measurement write-up is kept locally and is not part of the repository.
+Measured on the full seeded dataset (50,000 shipments) on the development machine, every list and search request took under 32 ms server-side (count and page together, median of 10 warm runs). The default sort and the created-date range are served by the `(CreatedAt, Id)` index; full-text search uses the `ShipmentSearch` catalog.
 
 ## Dashboard
 
@@ -375,20 +392,3 @@ docker compose exec db bash -c '/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U
 ```
 
 The SA password in `docker-compose.yml` is a local-only throwaway; see the comment there.
-
-## Run the tests
-
-```
-docker compose --profile tests run --rm tests
-```
-
-The tests run inside a Linux container against the same `db` service (only `db` is started; `seed` and `api` are not needed). Each run creates its own `dispatch_test_<guid>` database, applies the migrations, and drops it at the end. Tests create their own data and never read the seeded dataset. The command's exit code is the test result, so it works in scripts and CI.
-
-A plain `docker compose up` never runs the tests.
-
-## Stop
-
-```
-docker compose down       # stop and remove containers, keep the data
-docker compose down -v    # also delete the database volume
-```
